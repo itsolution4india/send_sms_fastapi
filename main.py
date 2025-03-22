@@ -12,6 +12,7 @@ class SMSRequest(BaseModel):
     msgType: str
     requestType: str
     content: str
+    token: str
 
 async def send_sms(receiver: str, sender: str, msgType: str, requestType: str, content: str, token: str):
     url = 'https://api.mobireach.com.bd/sms/send'
@@ -38,10 +39,14 @@ async def handle_sms_request(sms_request: SMSRequest, background_tasks: Backgrou
     msgType = sms_request.msgType
     requestType = sms_request.requestType
     content = sms_request.content
-    token = 'your_token_here'  # Get it dynamically in a real-world scenario
+    token = sms_request.token  # Get it dynamically in a real-world scenario
 
     # For bulk requests, process each number in the background
     for receiver in sms_request.receiver:
         background_tasks.add_task(send_sms, receiver, sender, msgType, requestType, content, token)
 
     return {"status": "SMS is being sent in background", "total_receivers": len(sms_request.receiver)}
+
+@app.get("/")
+def root():
+    return {"message": "Successful"}
