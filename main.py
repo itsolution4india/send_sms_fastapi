@@ -1,4 +1,3 @@
-# main.py
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from typing import List
@@ -32,6 +31,7 @@ async def send_sms(receiver: str, sender: str, msgType: str, requestType: str, c
         response = await client.post(url, json=data, headers=headers)
         if response.status_code != 200:
             raise HTTPException(status_code=response.status_code, detail=f"Error: {response.text}")
+        return response.json()  # Return the API response as JSON
 
 @app.post("/send_sms")
 async def handle_sms_request(sms_request: SMSRequest, background_tasks: BackgroundTasks):
@@ -41,11 +41,18 @@ async def handle_sms_request(sms_request: SMSRequest, background_tasks: Backgrou
     content = sms_request.content
     token = sms_request.token  # Get it dynamically in a real-world scenario
 
-    # For bulk requests, process each number in the background
-    for receiver in sms_request.receiver:
-        background_tasks.add_task(send_sms, receiver, sender, msgType, requestType, content, token)
+    responses = []
 
-    return {"status": "SMS is being sent in background", "total_receivers": len(sms_request.receiver)}
+    # For bulk requests, process each number in the background and store results
+    for receiver in sms_request.receiver:
+        response = await send_sms(receiver, sender, msgType, requestType, content, token)  # Await response
+        responses.append(response)
+
+    return {
+        "status": "SMS sent",
+        "total_receivers": len(sms_request.receiver),
+        "responses": responses
+    }
 
 @app.get("/")
 def root():
