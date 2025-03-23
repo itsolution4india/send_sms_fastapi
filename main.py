@@ -56,4 +56,4 @@ async def handle_sms_request(sms_request: SMSRequest, background_tasks: Backgrou
 
 @app.get("/")
 def root():
-    return {"message": "Successful"}
+    return {"message": "Send SMS API Successful"}
