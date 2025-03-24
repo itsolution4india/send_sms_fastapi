@@ -113,7 +113,7 @@ def get_db():
         db.close()
 
 # Function to send SMS and save response in the database
-async def send_sms(receiver: str, sender: str, msgType: str, requestType: str, content: str, token: str, campaign_id: str, db: Session):
+async def send_sms(receiver: str, sender: str, msgType: str, requestType: str, content: str, token: str, campaign_id: str, user_id: int, db: Session):
     url = 'https://api.mobireach.com.bd/sms/send'
     headers = {
         'Authorization': f'Bearer {token}',
@@ -159,7 +159,7 @@ async def send_sms(receiver: str, sender: str, msgType: str, requestType: str, c
             # Save the response to the database
             try:
                 report = ReportDetails(
-                    user_id=1,  # Replace with actual user ID
+                    user_id=user_id,  # Replace with actual user ID
                     campaign_id=campaign_id,
                     report_id=str(uuid4())[:12],  # Generate a unique report_id
                     status=response_data.get('status', 'UNKNOWN'),
@@ -186,7 +186,7 @@ async def send_sms(receiver: str, sender: str, msgType: str, requestType: str, c
 # Endpoint to handle SMS request and process it
 @app.post("/send_sms")
 async def handle_sms_request(sms_request: SMSRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    logger.info(f"Received SMS request for campaign {sms_request.campaign_id} with {len(sms_request.receiver)} recipients")
+    logger.info(f"Received SMS request for campaign {sms_request.campaign_id} with {len(sms_request.receiver)} {sms_request.receiver} recipients")
     
     sender = sms_request.sender
     msgType = sms_request.msgType
@@ -194,13 +194,14 @@ async def handle_sms_request(sms_request: SMSRequest, background_tasks: Backgrou
     content = sms_request.content
     token = sms_request.token
     campaign_id = sms_request.campaign_id
+    user_id = sms_request.user_id
 
     responses = []
 
     try:
         # Process bulk request without looping, send the whole list at once
         receiver_list = sms_request.receiver
-        response = await send_sms(receiver_list[0], sender, msgType, requestType, content, token, campaign_id, db)
+        response = await send_sms(receiver_list[0], sender, msgType, requestType, content, token, campaign_id,user_id, db)
         responses.append(response)
         
         logger.info(f"Successfully processed SMS request for campaign {campaign_id}")
