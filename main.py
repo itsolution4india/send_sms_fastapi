@@ -192,7 +192,7 @@ async def send_sms(receivers: list, sender: str, msgType: str, requestType: str,
                     report_id=str(uuid4())[:12],  # Generate a unique report_id
                     status=response_data.get('status', 'UNKNOWN'),
                     description=response_data.get('description', ''),
-                    msgCount=response_data.get('msgCount', 0),
+                    msgCount=len(receivers),
                     errorCode=response_data.get('errorCode', 0),
                     messageId=response_data.get('messageId', ''),
                     receiver=receivers  # Store the receiver's number
