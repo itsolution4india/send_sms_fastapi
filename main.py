@@ -84,7 +84,7 @@ class ReportDetails(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))  # Use timezone-aware datetime
-    user_id = Column(Integer, ForeignKey('customuser.id'))  # Assuming the CustomUser table exists
+    user_id = Column(Integer, ForeignKey('sms_app_customuser.id'))  # Assuming the CustomUser table exists
     campaign_id = Column(String(12), nullable=False)
     report_id = Column(String(12), unique=True, nullable=False)
     status = Column(String(20), nullable=False)
