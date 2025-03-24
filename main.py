@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.dialects.postgresql import JSON
 from datetime import datetime, timezone
 from typing import List
 import httpx
@@ -118,7 +119,7 @@ class ReportDetails(Base):
     msgCount = Column(Integer, nullable=False)
     errorCode = Column(Integer, nullable=False)
     messageId = Column(String(255), nullable=False)
-    receiver = Column(Text, nullable=False)  # New field for receiver
+    receiver = Column(JSON, nullable=False) # New field for receiver
 
 # SMS request body schema
 class SMSRequest(BaseModel):
@@ -194,7 +195,7 @@ async def send_sms(receivers: list, sender: str, msgType: str, requestType: str,
                     msgCount=response_data.get('msgCount', 0),
                     errorCode=response_data.get('errorCode', 0),
                     messageId=response_data.get('messageId', ''),
-                    receiver=",".join(receivers)
+                    receiver=receivers  # Store the receiver's number
                 )
                 db.add(report)
                 db.commit()
