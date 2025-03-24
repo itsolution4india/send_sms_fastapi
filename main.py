@@ -103,6 +103,7 @@ class SMSRequest(BaseModel):
     content: str
     token: str
     campaign_id: str
+    user_id: int
 
 # Dependency to get a DB session
 def get_db():
