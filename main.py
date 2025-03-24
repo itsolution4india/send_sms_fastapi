@@ -194,7 +194,7 @@ async def send_sms(receivers: list, sender: str, msgType: str, requestType: str,
                     msgCount=response_data.get('msgCount', 0),
                     errorCode=response_data.get('errorCode', 0),
                     messageId=response_data.get('messageId', ''),
-                    receiver=receivers  # Store the receiver's number
+                    receiver=",".join(receivers)
                 )
                 db.add(report)
                 db.commit()
