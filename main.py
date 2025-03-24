@@ -79,6 +79,32 @@ async def log_requests(request: Request, call_next):
         raise
 
 # ReportDetails model for saving responses
+
+class SenderID(Base):
+    __tablename__ = 'sms_app_senderid'
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))  # Auto-filled datetime
+    username = Column(String(255), unique=True, nullable=False)
+    password = Column(String(255), nullable=False)
+    sender_id = Column(String(255), nullable=False)
+    token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=False)
+    token_updated_date = Column(DateTime, nullable=False)
+
+class CustomUser(Base):
+    __tablename__ = 'sms_app_customuser'
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    email = Column(String(255), unique=True, nullable=False)
+    phone_number = Column(String(13), nullable=False)
+    sender_id = Column(Integer, ForeignKey('sms_app_senderid.id'))  # Assuming 'sms_app_senderid' is the table for SenderID
+    failed_login_attempts = Column(Integer, default=0)
+    last_failed_attempt = Column(DateTime, nullable=True)
+    locked_until = Column(DateTime, nullable=True)
+    
+    
 class ReportDetails(Base):
     __tablename__ = 'sms_app_reportdetails'
 
