@@ -448,6 +448,7 @@ async def send_sms_api(
         
         # 8. Parse External API Response
         if external_response.status_code != 200:
+            logging.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.text}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="SMS sending failed"
@@ -491,8 +492,8 @@ async def send_sms_api(
     
     except Exception as e:
         # Rollback and log error
-        db.rollback()
         logging.error(f"SMS Send Error: {str(e)}")
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"SMS sending failed: {str(e)}"
