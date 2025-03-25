@@ -97,18 +97,25 @@ class SenderID(Base):
     token = Column(Text, nullable=False)
     refresh_token = Column(Text, nullable=False)
     token_updated_date = Column(DateTime, nullable=False)
+    
+    users = relationship("CustomUser", back_populates="sender_id")
 
 class CustomUser(Base):
     __tablename__ = 'sms_app_customuser'
 
     id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     email = Column(String(255), unique=True, nullable=False)
     phone_number = Column(String(13), nullable=False)
-    sender_id = Column(Integer, ForeignKey('sms_app_senderid.id'))  # Assuming 'sms_app_senderid' is the table for SenderID
+    sender_id_id = Column(Integer, ForeignKey('sms_app_senderid.id'), nullable=True)  # Assuming 'sms_app_senderid' is the table for SenderID
+    sender_id = relationship("SenderID", back_populates="users")
     failed_login_attempts = Column(Integer, default=0)
     last_failed_attempt = Column(DateTime, nullable=True)
     locked_until = Column(DateTime, nullable=True)
+    
+    api_credentials = relationship("ApiCredentials", back_populates="user")
+    sms_api_responses = relationship("SendSmsApiResponse", back_populates="user")
+    accounts = relationship("Account", back_populates="user")
     
     
 class ReportDetails(Base):
@@ -407,7 +414,7 @@ async def send_sms_api(
         
         # 5. Validate Sender
         sender_query = select(SenderID).where(
-            SenderID.id == user.sender_id
+            SenderID.id == user.sender_id_id  
         )
         sender = db.execute(sender_query).scalar_one_or_none()
         
