@@ -214,6 +214,11 @@ class SmsSendRequest(BaseModel):
     msgType: str = Field(..., description="T=Transactional, P=Promotional")
     requestType: str = Field(..., description="S=Single, B=Bulk")
 
+class MessageStatusRequest(BaseModel):
+    sender: str
+    messageId: str
+    receiver: str
+
 # Pydantic model for SMS send response
 class SmsSendResponse(BaseModel):
     status: str
@@ -414,7 +419,7 @@ async def send_sms_api(
         
         # 5. Validate Sender
         sender_query = select(SenderID).where(
-            SenderID.id == user.sender_id_id  
+            SenderID.id == user.sender_id_id    
         )
         sender = db.execute(sender_query).scalar_one_or_none()
         
@@ -498,6 +503,52 @@ async def send_sms_api(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"SMS sending failed: {str(e)}"
         )
+
+@app.get("/sms/status")
+def get_message_status(sender: str, messageId: str, receiver: str, db: Session = Depends(get_db)):
+    # Step 1: Validate sender and token from SenderID
+    sender_obj = db.query(SenderID).filter(SenderID.sender_id == sender).first()
+    if not sender_obj:
+        raise HTTPException(status_code=404, detail="Invalid sender ID")
+
+    # Step 2: Validate refresh_token from ApiCredentials (Assuming related to CustomUser)
+    credentials = db.query(ApiCredentials).filter(ApiCredentials.sender_id == sender_obj.id).first()
+    if not credentials or credentials.refresh_token != sender_obj.refresh_token:
+        raise HTTPException(status_code=403, detail="Invalid refresh token")
+
+    # Step 3: Check if messageId exists in SendSmsApiResponse
+    sms_response = db.query(SendSmsApiResponse).filter(SendSmsApiResponse.message_id == messageId).first()
+    if not sms_response:
+        raise HTTPException(status_code=404, detail="MessageId not found")
+
+    # Step 4: Fetch actual messageId and token from SenderID
+    actual_messageId = sms_response.actual_message_id
+    token = sender_obj.token
+
+    # Step 5: Call external API
+    api_url = "https://api.mobireach.com.bd/sms/status"
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+    params = {
+        "sender": sender,
+        "messageId": actual_messageId,
+        "receiver": receiver
+    }
+
+    response = requests.get(api_url, headers=headers, params=params)
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to get message status from external API")
+
+    # Step 6: Modify response
+    api_response = response.json()
+
+    # Remove 'duringMsgBalance' and set 'msgCost' to 1
+    if "duringMsgBalance" in api_response:
+        del api_response["duringMsgBalance"]
+    api_response["msgCost"] = "1"
+
+    return api_response
 
 # Function to send SMS and save response in the database
 async def send_sms(receivers: list, sender: str, msgType: str, requestType: str, content: str, token: str, campaign_id: str, user_id: int,total_receivers:int, db: Session):
