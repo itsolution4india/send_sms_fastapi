@@ -505,7 +505,16 @@ async def send_sms_api(
         )
 
 @app.get("/sms/status")
-def get_message_status(sender: str, messageId: str, receiver: str, token: str, db: Session = Depends(get_db)):
+def get_message_status(
+    sender: str, 
+    messageId: str, 
+    receiver: str, 
+    authorization: str = Header(...),  # Extract token from Authorization header
+    db: Session = Depends(get_db)
+):
+    # Extract the Bearer token
+    token = authorization.split("Bearer ")[1]
+
     # Step 1: Validate sender from SenderID table
     sender_obj = db.query(SenderID).filter(SenderID.sender_id == sender).first()
     if not sender_obj:
@@ -516,7 +525,7 @@ def get_message_status(sender: str, messageId: str, receiver: str, token: str, d
     if not custom_user:
         raise HTTPException(status_code=404, detail="No user linked with this sender ID")
 
-    # Step 3: Validate token from ApiCredentials table (linked through CustomUser)
+    # Step 3: Validate token from ApiCredentials table
     api_credentials = db.query(ApiCredentials).filter(ApiCredentials.user_id == custom_user.id).first()
     if not api_credentials:
         raise HTTPException(status_code=403, detail="Failed to fetch API credentials")
@@ -530,7 +539,7 @@ def get_message_status(sender: str, messageId: str, receiver: str, token: str, d
     if not sms_response:
         raise HTTPException(status_code=404, detail="MessageId not found")
 
-    # Step 5: Call external API (only proceed after successful token validation)
+    # Step 5: Call external API
     api_url = "https://api.mobireach.com.bd/sms/status"
     headers = {
         "Authorization": f"Bearer {token}"
