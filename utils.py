@@ -3,7 +3,7 @@ import secrets
 
 
 # Token generation function
-def generate_token(length=100):
+def generate_token(length=120):
     
     alphabet = string.ascii_uppercase + string.ascii_lowercase + string.digits
     prefix = 'ITS'
