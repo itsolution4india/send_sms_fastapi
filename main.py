@@ -1,5 +1,5 @@
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Request, APIRouter, status, Header
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Text, Numeric
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -14,9 +14,10 @@ import json
 import os
 from logging.handlers import RotatingFileHandler
 import time
-from utils import generate_token
+from utils import generate_token, generate_message_id
 from typing import Dict
 from sqlalchemy import select
+import requests
 
 # Set up logging
 # Create logs directory if it doesn't exist
@@ -197,6 +198,26 @@ class TokenRefreshResponse(BaseModel):
     token: str
     refresh_token: str
     
+# Pydantic model for SMS send request
+class SmsSendRequest(BaseModel):
+    sender: str = Field(..., description="Sender ID/CLI")
+    receiver: List[str] = Field(..., description="List of receiver phone numbers")
+    contentType: int = Field(..., description="1=Regular, 2=Unicode")
+    content: str = Field(..., description="Message content")
+    msgType: str = Field(..., description="T=Transactional, P=Promotional")
+    requestType: str = Field(..., description="S=Single, B=Bulk")
+
+# Pydantic model for SMS send response
+class SmsSendResponse(BaseModel):
+    status: str
+    description: str
+    msgCost: str
+    currentBalance: str
+    contentType: int
+    msgCount: int
+    errorCode: int
+    messageId: int
+    
 # SMS request body schema
 class SMSRequest(BaseModel):
     sender: str
@@ -209,6 +230,8 @@ class SMSRequest(BaseModel):
     user_id: int
 
 auth_router = APIRouter(prefix="/auth", tags=["authentication"])
+
+sms_router = APIRouter(prefix="/sms", tags=["sms"])
         
 # Dependency to get a DB session
 def get_db():
@@ -277,12 +300,6 @@ async def refresh_token(
     authorization: str = Header(None),
     db: Session = Depends(get_db)
 ):
-    """
-    Refresh API token with strict validation:
-    1. Validate refresh token exists
-    2. Check token age (must be less than 1 hour old)
-    3. Generate new token pair if valid
-    """
     try:
         # Validate Authorization header
         if not authorization or not authorization.startswith("Bearer "):
@@ -346,6 +363,132 @@ async def refresh_token(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Token refresh failed: {str(e)}"
+        )
+
+@sms_router.post("/send")
+async def send_sms_api(
+    sms_request: SmsSendRequest,
+    authorization: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    try:
+        # 1. Validate Authorization Header
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or missing refresh token"
+            )
+        
+        refresh_token = authorization.split(" ")[1]
+        
+        # 2. Validate Refresh Token
+        query_api_cred = select(ApiCredentials).where(
+            ApiCredentials.refresh_token == refresh_token
+        )
+        api_credential = db.execute(query_api_cred).scalar_one_or_none()
+        
+        if not api_credential:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token"
+            )
+        
+        # 3. Get User and Account
+        user = api_credential.user
+        
+        # 4. Check Account Balance
+        account = db.query(Account).filter(Account.user_id == user.id).first()
+        
+        if not account or account.api_balance < len(sms_request.receiver):
+            return {
+                "error": "balance error", 
+                "message": "Insufficient balance"
+            }
+        
+        # 5. Validate Sender
+        sender_query = select(SenderID).where(
+            SenderID.id == user.sender_id
+        )
+        sender = db.execute(sender_query).scalar_one_or_none()
+        
+        if not sender:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid sender"
+            )
+        
+        # 6. Prepare SMS Send Request
+        sms_payload = {
+            "sender": sms_request.sender,
+            "receiver": sms_request.receiver,
+            "contentType": sms_request.contentType,
+            "content": sms_request.content,
+            "msgType": sms_request.msgType,
+            "requestType": sms_request.requestType
+        }
+        
+        # 7. Send SMS via External API
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {sender.token}"
+        }
+        
+        external_response = requests.post(
+            "https://api.mobireach.com.bd/sms/send", 
+            json=sms_payload, 
+            headers=headers
+        )
+        
+        # 8. Parse External API Response
+        if external_response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="SMS sending failed"
+            )
+        
+        external_data = external_response.json()
+        
+        # 9. Update Account Balance
+        account.api_balance -= len(sms_request.receiver)
+        
+        # 10. Create SMS API Response
+        sms_api_response = SendSmsApiResponse(
+            user_id=user.id,
+            status=external_data.get('status', 'UNKNOWN'),
+            description=external_data.get('description', ''),
+            content_type=sms_request.contentType,
+            errorCode=external_data.get('errorCode', 0),
+            actual_msgCount=float(external_data.get('msgCost', 0)),
+            actual_messageId=str(external_data.get('messageId', '')),
+            actual_current_balance=float(external_data.get('currentBalance', 0)),
+            user_msgCount=len(sms_request.receiver),
+            user_messageId=str(generate_message_id()),
+            user_current_balance=float(account.api_balance)
+        )
+        
+        # 11. Commit Database Changes
+        db.add(sms_api_response)
+        db.commit()
+        
+        # 12. Return Response
+        return {
+            "status": "SUCCESS",
+            "description": "Message sent",
+            "msgCost": str(sms_api_response.actual_msgCount),
+            "currentBalance": str(sms_api_response.user_current_balance),
+            "contentType": sms_request.contentType,
+            "msgCount": len(sms_request.receiver),
+            "errorCode": sms_api_response.errorCode,
+            "messageId": sms_api_response.user_messageId
+        }
+    
+    except Exception as e:
+        # Rollback and log error
+        db.rollback()
+        logging.error(f"SMS Send Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"SMS sending failed: {str(e)}"
         )
 
 # Function to send SMS and save response in the database
