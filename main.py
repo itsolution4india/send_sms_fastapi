@@ -505,7 +505,7 @@ async def send_sms_api(
         )
 
 @app.get("/sms/status")
-def get_message_status(sender: str, messageId: str, receiver: str, db: Session = Depends(get_db)):
+def get_message_status(sender: str, messageId: str, receiver: str, token: str, db: Session = Depends(get_db)):
     # Step 1: Validate sender from SenderID table
     sender_obj = db.query(SenderID).filter(SenderID.sender_id == sender).first()
     if not sender_obj:
@@ -530,18 +530,14 @@ def get_message_status(sender: str, messageId: str, receiver: str, db: Session =
     if not sms_response:
         raise HTTPException(status_code=404, detail="MessageId not found")
 
-    # Step 5: Fetch actual messageId and token from SenderID
-    actual_messageId = sms_response.actual_message_id
-    token = sender_obj.token
-
-    # Step 6: Call external API
+    # Step 5: Call external API (only proceed after successful token validation)
     api_url = "https://api.mobireach.com.bd/sms/status"
     headers = {
         "Authorization": f"Bearer {token}"
     }
     params = {
         "sender": sender,
-        "messageId": actual_messageId,
+        "messageId": sms_response.actual_message_id,
         "receiver": receiver
     }
 
@@ -549,7 +545,7 @@ def get_message_status(sender: str, messageId: str, receiver: str, db: Session =
     if response.status_code != 200:
         raise HTTPException(status_code=500, detail="Failed to get message status from external API")
 
-    # Step 7: Modify response
+    # Step 6: Modify response
     api_response = response.json()
 
     # Remove 'duringMsgBalance' and set 'msgCost' to 1
