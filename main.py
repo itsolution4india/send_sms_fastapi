@@ -184,7 +184,6 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
-# Pydantic model for token response
 class TokenResponse(BaseModel):
     token: str
     refresh_token: str
@@ -200,7 +199,7 @@ class SMSRequest(BaseModel):
     campaign_id: str
     user_id: int
 
-router = APIRouter(prefix="/auth", tags=["authentication"])
+auth_router = APIRouter(prefix="/auth", tags=["authentication"])
         
 # Dependency to get a DB session
 def get_db():
@@ -211,13 +210,13 @@ def get_db():
         db.close()
 
 
-@router.post("/token", response_model=TokenResponse)
+@auth_router.post("/token", response_model=TokenResponse)
 async def generate_api_token(
     login_request: LoginRequest, 
-    db: Session = Depends(get_db)  # Assumes you have a dependency to get database session
+    db: Session = Depends(get_db)
 ):
     try:
-        # Find the API credentials for the given username
+        # Find API credentials
         query = select(ApiCredentials).where(
             ApiCredentials.username == login_request.username
         )
@@ -227,43 +226,38 @@ async def generate_api_token(
         if not api_credential:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, 
-                detail="Invalid username"
+                detail="Invalid username or password"
             )
         
-        # Password validation (replace with your actual password verification method)
-        # This is a placeholder - you should use proper password hashing/checking
+        # Password validation (replace with secure method)
         if api_credential.password != login_request.password:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, 
-                detail="Invalid password"
+                detail="Invalid username or password"
             )
         
         # Generate new tokens
         new_token = generate_token()
         new_refresh_token = generate_token()
         
-        # Update the database record
+        # Update database
         api_credential.token = new_token
         api_credential.refresh_token = new_refresh_token
         api_credential.token_updated_date = datetime.now(timezone.utc)
         
-        # Commit the changes
         db.commit()
         
-        # Return the new tokens
         return {
             "token": new_token,
             "refresh_token": new_refresh_token
         }
     
     except Exception as e:
-        # Log the error (in a real application)
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Token generation failed: {str(e)}"
         )
-
 
 # Function to send SMS and save response in the database
 async def send_sms(receivers: list, sender: str, msgType: str, requestType: str, content: str, token: str, campaign_id: str, user_id: int,total_receivers:int, db: Session):
@@ -389,6 +383,8 @@ def health_check():
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {str(exc)}")
     return {"detail": "Internal server error", "error_type": type(exc).__name__}
+
+app.include_router(auth_router)
 
 if __name__ == "__main__":
     import uvicorn
