@@ -506,26 +506,31 @@ async def send_sms_api(
 
 @app.get("/sms/status")
 def get_message_status(sender: str, messageId: str, receiver: str, db: Session = Depends(get_db)):
-    # Step 1: Validate sender and token from SenderID
+    # Step 1: Validate sender from SenderID table
     sender_obj = db.query(SenderID).filter(SenderID.sender_id == sender).first()
     if not sender_obj:
         raise HTTPException(status_code=404, detail="Invalid sender ID")
 
-    # Step 2: Validate refresh_token from ApiCredentials (Assuming related to CustomUser)
-    credentials = db.query(ApiCredentials).filter(ApiCredentials.sender_id == sender_obj.id).first()
-    if not credentials or credentials.refresh_token != sender_obj.refresh_token:
-        raise HTTPException(status_code=403, detail="Invalid refresh token")
+    # Step 2: Get CustomUser linked to this SenderID
+    custom_user = db.query(CustomUser).filter(CustomUser.sender_id_id == sender_obj.id).first()
+    if not custom_user:
+        raise HTTPException(status_code=404, detail="No user linked with this sender ID")
 
-    # Step 3: Check if messageId exists in SendSmsApiResponse
+    # Step 3: Validate token from ApiCredentials table (linked through CustomUser)
+    api_credentials = db.query(ApiCredentials).filter(ApiCredentials.user_id == custom_user.id).first()
+    if not api_credentials or api_credentials.token != sender_obj.token:
+        raise HTTPException(status_code=403, detail="Invalid token or refresh token")
+
+    # Step 4: Check if messageId exists in SendSmsApiResponse table
     sms_response = db.query(SendSmsApiResponse).filter(SendSmsApiResponse.message_id == messageId).first()
     if not sms_response:
         raise HTTPException(status_code=404, detail="MessageId not found")
 
-    # Step 4: Fetch actual messageId and token from SenderID
+    # Step 5: Fetch actual messageId and token from SenderID
     actual_messageId = sms_response.actual_message_id
     token = sender_obj.token
 
-    # Step 5: Call external API
+    # Step 6: Call external API
     api_url = "https://api.mobireach.com.bd/sms/status"
     headers = {
         "Authorization": f"Bearer {token}"
@@ -540,7 +545,7 @@ def get_message_status(sender: str, messageId: str, receiver: str, db: Session =
     if response.status_code != 200:
         raise HTTPException(status_code=500, detail="Failed to get message status from external API")
 
-    # Step 6: Modify response
+    # Step 7: Modify response
     api_response = response.json()
 
     # Remove 'duringMsgBalance' and set 'msgCost' to 1
