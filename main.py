@@ -617,6 +617,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     return {"detail": "Internal server error", "error_type": type(exc).__name__}
 
 app.include_router(auth_router)
+app.include_router(sms_router)
 
 if __name__ == "__main__":
     import uvicorn
