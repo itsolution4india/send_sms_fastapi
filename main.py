@@ -5,7 +5,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSON
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List
 import httpx
 from uuid import uuid4
@@ -188,6 +188,11 @@ class TokenResponse(BaseModel):
     token: str
     refresh_token: str
     
+class ErrorResponse(BaseModel):
+    error: str
+    message: str
+
+# Pydantic model for token response
 class TokenRefreshResponse(BaseModel):
     token: str
     refresh_token: str
@@ -263,21 +268,34 @@ async def generate_api_token(
             detail=f"Token generation failed: {str(e)}"
         )
 
-@auth_router.post("/token/refresh", response_model=TokenRefreshResponse)
+@auth_router.post("/token/refresh", 
+    responses={
+        401: {"model": ErrorResponse}
+    }
+)
 async def refresh_token(
     authorization: str = Header(None),
     db: Session = Depends(get_db)
 ):
+    """
+    Refresh API token with strict validation:
+    1. Validate refresh token exists
+    2. Check token age (must be less than 1 hour old)
+    3. Generate new token pair if valid
+    """
     try:
-        # Extract refresh token from header
+        # Validate Authorization header
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or missing refresh token"
             )
         
-        # Remove 'Bearer ' prefix
+        # Extract refresh token
         refresh_token = authorization.split(" ")[1]
+        
+        # Current timestamp
+        current_time = datetime.now(timezone.utc)
         
         # Find API credentials with matching refresh token
         query = select(ApiCredentials).where(
@@ -285,12 +303,21 @@ async def refresh_token(
         )
         api_credential = db.execute(query).scalar_one_or_none()
         
-        # Validate refresh token
+        # Validate refresh token exists
         if not api_credential:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid refresh token"
             )
+        
+        # Check token age
+        token_age = current_time - api_credential.token_updated_date
+        if token_age > timedelta(hours=1):
+            # Return custom error response for token expiration
+            return {
+                "error": "Unauthorized",
+                "message": "Token has expired"
+            }
         
         # Generate new token pair
         new_token = generate_token()
@@ -299,7 +326,7 @@ async def refresh_token(
         # Update database record
         api_credential.token = new_token
         api_credential.refresh_token = new_refresh_token
-        api_credential.token_updated_date = datetime.now(timezone.utc)
+        api_credential.token_updated_date = current_time
         
         # Commit changes
         db.commit()
