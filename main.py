@@ -519,9 +519,11 @@ def get_message_status(sender: str, messageId: str, receiver: str, db: Session =
     # Step 3: Validate token from ApiCredentials table (linked through CustomUser)
     api_credentials = db.query(ApiCredentials).filter(ApiCredentials.user_id == custom_user.id).first()
     if not api_credentials:
-        raise HTTPException(status_code=403, detail="Failed to featch api_credentials")
-    if api_credentials and api_credentials.token != sender_obj.token:
-        raise HTTPException(status_code=403, detail="Invalid token or refresh token")
+        raise HTTPException(status_code=403, detail="Failed to fetch API credentials")
+
+    # Validate request token with the token in ApiCredentials
+    if api_credentials.token != token:
+        raise HTTPException(status_code=403, detail="Invalid token")
 
     # Step 4: Check if messageId exists in SendSmsApiResponse table
     sms_response = db.query(SendSmsApiResponse).filter(SendSmsApiResponse.message_id == messageId).first()
