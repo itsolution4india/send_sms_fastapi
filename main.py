@@ -1,8 +1,9 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Request
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Request, APIRouter, status
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Text
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Text, Numeric
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSON
 from datetime import datetime, timezone
 from typing import List
@@ -13,6 +14,9 @@ import json
 import os
 from logging.handlers import RotatingFileHandler
 import time
+from utils import generate_token
+from typing import Dict
+from sqlalchemy import select
 
 # Set up logging
 # Create logs directory if it doesn't exist
@@ -119,8 +123,72 @@ class ReportDetails(Base):
     msgCount = Column(Integer, nullable=False)
     errorCode = Column(Integer, nullable=False)
     messageId = Column(String(255), nullable=False)
-    receiver = Column(JSON, nullable=False) # New field for receiver
+    receiver = Column(JSON, nullable=False) 
 
+class ApiCredentials(Base):
+    __tablename__ = 'sms_app_apicredentials'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    user_id = Column(Integer, ForeignKey('sms_app_customuser.id'))
+    username = Column(String(255), unique=True, nullable=False)
+    password = Column(String(255), nullable=False)
+    token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=False)
+    token_updated_date = Column(DateTime, nullable=False)
+    
+    # Relationship
+    user = relationship("CustomUser", back_populates="api_credentials")
+    
+class SendSmsApiResponse(Base):
+    __tablename__ = 'sms_app_sendsmsapiresponse'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    user_id = Column(Integer, ForeignKey('sms_app_customuser.id'))
+    status = Column(String(20), nullable=False)
+    description = Column(Text, nullable=False)
+    content_type = Column(Integer, nullable=False)
+    errorCode = Column(Integer, nullable=False)
+    actual_msgCount = Column(Integer, nullable=False)
+    actual_messageId = Column(String(255), nullable=False)
+    actual_current_balance = Column(Integer, nullable=False)
+    user_msgCount = Column(Integer, nullable=False)
+    user_messageId = Column(String(255), nullable=False)
+    user_current_balance = Column(Integer, nullable=False)
+    
+    # Relationship
+    user = relationship("CustomUser", back_populates="sms_api_responses")
+    
+class Account(Base):
+    __tablename__ = 'sms_app_account'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    account_number = Column(String(16), nullable=False)
+    account_holder_name = Column(String(255), nullable=False)
+    account_id = Column(String(255), unique=True, nullable=False)
+    gui_balance = Column(Numeric(12, 4), nullable=False)
+    api_balance = Column(Numeric(12, 4), nullable=False)
+    user_id = Column(Integer, ForeignKey('sms_app_customuser.id'))
+    
+    # Relationship
+    user = relationship("CustomUser", back_populates="accounts")
+
+
+CustomUser.api_credentials = relationship("ApiCredentials", back_populates="user")
+CustomUser.sms_api_responses = relationship("SendSmsApiResponse", back_populates="user")
+CustomUser.accounts = relationship("Account", back_populates="user")
+
+# Pydantic model for login request
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+# Pydantic model for token response
+class TokenResponse(BaseModel):
+    token: str
+    refresh_token: str
+    
 # SMS request body schema
 class SMSRequest(BaseModel):
     sender: str
@@ -132,6 +200,8 @@ class SMSRequest(BaseModel):
     campaign_id: str
     user_id: int
 
+router = APIRouter(prefix="/auth", tags=["authentication"])
+        
 # Dependency to get a DB session
 def get_db():
     db = SessionLocal()
@@ -139,6 +209,61 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+@router.post("/token", response_model=TokenResponse)
+async def generate_api_token(
+    login_request: LoginRequest, 
+    db: Session = Depends(get_db)  # Assumes you have a dependency to get database session
+):
+    try:
+        # Find the API credentials for the given username
+        query = select(ApiCredentials).where(
+            ApiCredentials.username == login_request.username
+        )
+        api_credential = db.execute(query).scalar_one_or_none()
+        
+        # Validate credentials
+        if not api_credential:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="Invalid username"
+            )
+        
+        # Password validation (replace with your actual password verification method)
+        # This is a placeholder - you should use proper password hashing/checking
+        if api_credential.password != login_request.password:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="Invalid password"
+            )
+        
+        # Generate new tokens
+        new_token = generate_token()
+        new_refresh_token = generate_token()
+        
+        # Update the database record
+        api_credential.token = new_token
+        api_credential.refresh_token = new_refresh_token
+        api_credential.token_updated_date = datetime.now(timezone.utc)
+        
+        # Commit the changes
+        db.commit()
+        
+        # Return the new tokens
+        return {
+            "token": new_token,
+            "refresh_token": new_refresh_token
+        }
+    
+    except Exception as e:
+        # Log the error (in a real application)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail=f"Token generation failed: {str(e)}"
+        )
+
 
 # Function to send SMS and save response in the database
 async def send_sms(receivers: list, sender: str, msgType: str, requestType: str, content: str, token: str, campaign_id: str, user_id: int,total_receivers:int, db: Session):
