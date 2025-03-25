@@ -1,4 +1,4 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Request, APIRouter, status
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Request, APIRouter, status, Header
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Text, Numeric
 from sqlalchemy.ext.declarative import declarative_base
@@ -188,6 +188,10 @@ class TokenResponse(BaseModel):
     token: str
     refresh_token: str
     
+class TokenRefreshResponse(BaseModel):
+    token: str
+    refresh_token: str
+    
 # SMS request body schema
 class SMSRequest(BaseModel):
     sender: str
@@ -257,6 +261,64 @@ async def generate_api_token(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Token generation failed: {str(e)}"
+        )
+
+@auth_router.post("/token/refresh", response_model=TokenRefreshResponse)
+async def refresh_token(
+    authorization: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    try:
+        # Extract refresh token from header
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or missing refresh token"
+            )
+        
+        # Remove 'Bearer ' prefix
+        refresh_token = authorization.split(" ")[1]
+        
+        # Find API credentials with matching refresh token
+        query = select(ApiCredentials).where(
+            ApiCredentials.refresh_token == refresh_token
+        )
+        api_credential = db.execute(query).scalar_one_or_none()
+        
+        # Validate refresh token
+        if not api_credential:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token"
+            )
+        
+        # Generate new token pair
+        new_token = generate_token()
+        new_refresh_token = generate_token()
+        
+        # Update database record
+        api_credential.token = new_token
+        api_credential.refresh_token = new_refresh_token
+        api_credential.token_updated_date = datetime.now(timezone.utc)
+        
+        # Commit changes
+        db.commit()
+        
+        # Return new token pair
+        return {
+            "token": new_token,
+            "refresh_token": new_refresh_token
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Rollback and handle unexpected errors
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Token refresh failed: {str(e)}"
         )
 
 # Function to send SMS and save response in the database
