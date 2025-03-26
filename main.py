@@ -535,7 +535,7 @@ def get_message_status(
         raise HTTPException(status_code=403, detail="Invalid token")
 
     # Step 4: Check if messageId exists in SendSmsApiResponse table
-    sms_response = db.query(SendSmsApiResponse).filter(SendSmsApiResponse.message_id == messageId).first()
+    sms_response = db.query(SendSmsApiResponse).filter(SendSmsApiResponse.user_messageId == messageId).first()
     if not sms_response:
         raise HTTPException(status_code=404, detail="MessageId not found")
 
@@ -546,7 +546,7 @@ def get_message_status(
     }
     params = {
         "sender": sender,
-        "messageId": sms_response.actual_message_id,
+        "messageId": sms_response.actual_messageId,
         "receiver": receiver
     }
 
