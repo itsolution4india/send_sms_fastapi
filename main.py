@@ -552,7 +552,7 @@ def get_message_status(
 
     response = requests.get(api_url, headers=headers, params=params)
     if response.status_code != 200:
-        raise HTTPException(status_code=500, detail="Failed to get message status from external API")
+        raise HTTPException(status_code=500, detail=f"Failed to get message status from external API {sender} {sms_response.actual_messageId} {receiver} {response.json()}")
 
     # Step 6: Modify response
     api_response = response.json()
