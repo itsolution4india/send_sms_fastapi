@@ -554,7 +554,7 @@ def get_message_status(
 
     response = requests.get(api_url, headers=headers, params=params)
     if response.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Failed to get message status from external API {sender} {sms_response.actual_messageId} {receiver} {response.json()}")
+        raise HTTPException(status_code=500, detail=f"Failed to get message status from external API")
 
     # Step 6: Modify response
     api_response = response.json()
@@ -563,6 +563,7 @@ def get_message_status(
     if "duringMsgBalance" in api_response:
         del api_response["duringMsgBalance"]
     api_response["msgCost"] = "1"
+    api_response["messageId"] = messageId
 
     return api_response
 
