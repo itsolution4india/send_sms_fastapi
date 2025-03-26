@@ -205,11 +205,6 @@ class TokenRefreshResponse(BaseModel):
     token: str
     refresh_token: str
     
-class BalanceResponse(BaseModel):
-    status: str
-    guiBalance: str
-    apiBalance: str
-    
 # Pydantic model for SMS send request
 class SmsSendRequest(BaseModel):
     sender: str = Field(..., description="Sender ID/CLI")
@@ -573,29 +568,32 @@ def get_message_status(
     return api_response
 
 @app.get("/account/balance")
-def get_account_balance(
+def check_account_balance(
     username: str, 
     authorization: str = Header(...),  # Extract token from Authorization header
     db: Session = Depends(get_db)
 ):
-    # Extract the Bearer token from the authorization header
-    token = authorization.split("Bearer ")[1]
+    # Extract the Bearer token
+    try:
+        token = authorization.split("Bearer ")[1]
+    except IndexError:
+        raise HTTPException(status_code=401, detail="Invalid Authorization header format")
 
-    # Step 1: Validate username and token from ApiCredentials table
+    # Step 1: Validate API Credentials
     api_credentials = db.query(ApiCredentials).filter(ApiCredentials.username == username).first()
     if not api_credentials:
         raise HTTPException(status_code=404, detail="Username not found")
 
-    # Check if the token matches
+    # Step 2: Validate Token
     if api_credentials.token != token:
         raise HTTPException(status_code=403, detail="Invalid token")
 
-    # Step 2: Fetch the account linked to the user from Account table
+    # Step 3: Find associated Account
     account = db.query(Account).filter(Account.user_id == api_credentials.user_id).first()
     if not account:
-        raise HTTPException(status_code=404, detail="Account not found for the user")
+        raise HTTPException(status_code=404, detail="No account found for this user")
 
-    # Step 3: Prepare the response with gui_balance and api_balance
+    # Step 4: Prepare Response
     response = {
         "status": "SUCCESS",
         "guiBalance": str(account.gui_balance),
