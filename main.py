@@ -385,10 +385,11 @@ async def send_sms_api(
 ):
     # 1. Validate Authorization Header
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing refresh token"
-        )
+        return {
+            "error": "Unauthorized",
+            "message": "Invalid or missing refresh token",
+            "errorCode": 401
+        }
     
     refresh_token = authorization.split(" ")[1]
     
@@ -399,10 +400,11 @@ async def send_sms_api(
     api_credential = db.execute(query_api_cred).scalar_one_or_none()
     
     if not api_credential:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid refresh token"
-        )
+        return {
+            "error": "Unauthorized",
+            "message": "Invalid refresh token",
+            "errorCode": 401
+        }
     
     # 3. Get User and Account
     user = api_credential.user
@@ -412,8 +414,9 @@ async def send_sms_api(
     
     if not account or account.api_balance < len(sms_request.receiver):
         return {
-            "error": "balance error", 
-            "message": "Insufficient balance"
+            "error": "Balance error",
+            "message": "Insufficient Balance ",
+            "errorCode": 1506
         }
     
     # 5. Validate Sender
@@ -423,10 +426,13 @@ async def send_sms_api(
     sender = db.execute(sender_query).scalar_one_or_none()
     
     if not sender:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid sender"
-        )
+        return {
+            "error": "Unauthorized",
+            "message": "Invalid Sender ID",
+            "errorCode": 401
+        }
+        
+        
     
     # Ensure sms_payload is initialized before use
     sms_payload = None
@@ -455,11 +461,12 @@ async def send_sms_api(
         
         # 8. Parse External API Response
         if external_response.status_code != 200:
-            logging.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.text}")
-            raise HTTPException(
-                status_code=500,
-                detail="SMS sending failed"
-            )
+            logging.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.json()}")
+            return {
+                "error": "Unauthorized",
+                "message": external_response.json(),
+                "errorCode": 401
+            }
         
         external_data = external_response.json()
         
@@ -501,13 +508,11 @@ async def send_sms_api(
         # Log the specific error
         logging.error(f"Error in send_sms_api: {str(e)}")
         
-        # Rollback the transaction in case of error
         db.rollback()
         
-        # Raise an HTTP exception with the error details
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred: {str(e)}"
+            detail=f"An error occurred"
         )
 
 @app.get("/sms/status")
