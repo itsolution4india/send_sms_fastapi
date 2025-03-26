@@ -205,6 +205,11 @@ class TokenRefreshResponse(BaseModel):
     token: str
     refresh_token: str
     
+class BalanceResponse(BaseModel):
+    status: str
+    guiBalance: str
+    apiBalance: str
+    
 # Pydantic model for SMS send request
 class SmsSendRequest(BaseModel):
     sender: str = Field(..., description="Sender ID/CLI")
@@ -566,6 +571,38 @@ def get_message_status(
     api_response["messageId"] = messageId
 
     return api_response
+
+@app.get("/account/balance", response_model=BalanceResponse)
+def get_account_balance(
+    username: str,
+    authorization: str = Header(...),  # Authorization token from the header
+    db: Session = Depends(get_db)
+):
+    # Extract Bearer token from Authorization header
+    token = authorization.split("Bearer ")[1]
+
+    # Step 1: Validate credentials from ApiCredentials table
+    api_credentials = db.query(ApiCredentials).filter(ApiCredentials.username == username).first()
+    
+    if not api_credentials or api_credentials.token != token:
+        raise HTTPException(status_code=403, detail="Invalid credentials")
+
+    # Step 2: Get the user linked with these credentials
+    custom_user = api_credentials.user
+    if not custom_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Step 3: Get account details linked to this user
+    account = db.query(Account).filter(Account.user_id == custom_user.id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    # Step 4: Prepare response with gui_balance and api_balance
+    return {
+        "status": "SUCCESS",
+        "guiBalance": str(account.gui_balance),
+        "apiBalance": str(account.api_balance)
+    }
 
 # Function to send SMS and save response in the database
 async def send_sms(receivers: list, sender: str, msgType: str, requestType: str, content: str, token: str, campaign_id: str, user_id: int,total_receivers:int, db: Session):
