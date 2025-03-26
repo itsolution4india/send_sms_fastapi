@@ -507,7 +507,7 @@ async def send_sms_api(
         # Raise an HTTP exception with the error details
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred: {str(e)}"
+            detail=f"An error occurred: {str(e)} {sms_request.sender}, {sms_request.receiver} {sms_request.contentType} {sms_request.content} {sms_request.msgType} {sms_request.requestType} {sender.token}"
         )
 
 @app.get("/sms/status")
