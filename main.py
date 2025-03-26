@@ -386,7 +386,7 @@ async def send_sms_api(
     # 1. Validate Authorization Header
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=401,
             detail="Invalid or missing refresh token"
         )
     
@@ -400,7 +400,7 @@ async def send_sms_api(
     
     if not api_credential:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=401,
             detail="Invalid refresh token"
         )
     
@@ -424,7 +424,7 @@ async def send_sms_api(
     
     if not sender:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=400,
             detail="Invalid sender"
         )
     
@@ -457,7 +457,7 @@ async def send_sms_api(
         if external_response.status_code != 200:
             logging.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.text}")
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                status_code=500,
                 detail="SMS sending failed"
             )
         
@@ -507,7 +507,7 @@ async def send_sms_api(
         # Raise an HTTP exception with the error details
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred: {str(e)} {sms_request.sender}, {sms_request.receiver} {sms_request.contentType} {sms_request.content} {sms_request.msgType} {sms_request.requestType} {sender.token}"
+            detail=f"An error occurred: {str(e)}"
         )
 
 @app.get("/sms/status")
