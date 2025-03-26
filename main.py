@@ -428,72 +428,87 @@ async def send_sms_api(
             detail="Invalid sender"
         )
     
-    # 6. Prepare SMS Send Request
-    sms_payload = {
-        "sender": sms_request.sender,
-        "receiver": sms_request.receiver,
-        "contentType": sms_request.contentType,
-        "content": sms_request.content,
-        "msgType": sms_request.msgType,
-        "requestType": sms_request.requestType
-    }
+    # Ensure sms_payload is initialized before use
+    sms_payload = None
+    try:
+        # 6. Prepare SMS Send Request
+        sms_payload = {
+            "sender": sms_request.sender,
+            "receiver": sms_request.receiver,
+            "contentType": sms_request.contentType,
+            "content": sms_request.content,
+            "msgType": sms_request.msgType,
+            "requestType": sms_request.requestType
+        }
+        
+        # 7. Send SMS via External API
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {sender.token}"
+        }
+        
+        external_response = requests.post(
+            "https://api.mobireach.com.bd/sms/send", 
+            json=sms_payload, 
+            headers=headers
+        )
+        
+        # 8. Parse External API Response
+        if external_response.status_code != 200:
+            logging.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.text}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="SMS sending failed"
+            )
+        
+        external_data = external_response.json()
+        
+        # 9. Update Account Balance
+        account.api_balance -= len(sms_request.receiver)
+        
+        # 10. Create SMS API Response
+        sms_api_response = SendSmsApiResponse(
+            user_id=user.id,
+            status=external_data.get('status', 'UNKNOWN'),
+            description=external_data.get('description', ''),
+            content_type=sms_request.contentType,
+            errorCode=external_data.get('errorCode', 0),
+            actual_msgCount=float(external_data.get('msgCost', 0)),
+            actual_messageId=str(external_data.get('messageId', '')),
+            actual_current_balance=float(external_data.get('currentBalance', 0)),
+            user_msgCount=len(sms_request.receiver),
+            user_messageId=str(generate_message_id()),
+            user_current_balance=float(account.api_balance)
+        )
+        
+        # 11. Commit Database Changes
+        db.add(sms_api_response)
+        db.commit()
+        
+        # 12. Return Response
+        return {
+            "status": "SUCCESS",
+            "description": "Message sent",
+            "msgCost": str(sms_api_response.actual_msgCount),
+            "currentBalance": str(sms_api_response.user_current_balance),
+            "contentType": sms_request.contentType,
+            "msgCount": len(sms_request.receiver),
+            "errorCode": sms_api_response.errorCode,
+            "messageId": sms_api_response.user_messageId
+        }
     
-    # 7. Send SMS via External API
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {sender.token}"
-    }
-    
-    external_response = requests.post(
-        "https://api.mobireach.com.bd/sms/send", 
-        json=sms_payload, 
-        headers=headers
-    )
-    
-    # 8. Parse External API Response
-    if external_response.status_code != 200:
-        logging.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.text}")
+    except Exception as e:
+        # Log the specific error
+        logging.error(f"Error in send_sms_api: {str(e)}")
+        
+        # Rollback the transaction in case of error
+        db.rollback()
+        
+        # Raise an HTTP exception with the error details
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SMS sending failed"
+            detail=f"An error occurred: {str(e)}"
         )
-    
-    external_data = external_response.json()
-    
-    # 9. Update Account Balance
-    account.api_balance -= len(sms_request.receiver)
-    
-    # 10. Create SMS API Response
-    sms_api_response = SendSmsApiResponse(
-        user_id=user.id,
-        status=external_data.get('status', 'UNKNOWN'),
-        description=external_data.get('description', ''),
-        content_type=sms_request.contentType,
-        errorCode=external_data.get('errorCode', 0),
-        actual_msgCount=float(external_data.get('msgCost', 0)),
-        actual_messageId=str(external_data.get('messageId', '')),
-        actual_current_balance=float(external_data.get('currentBalance', 0)),
-        user_msgCount=len(sms_request.receiver),
-        user_messageId=str(generate_message_id()),
-        user_current_balance=float(account.api_balance)
-    )
-    
-    # 11. Commit Database Changes
-    db.add(sms_api_response)
-    db.commit()
-    
-    # 12. Return Response
-    return {
-        "status": "SUCCESS",
-        "description": "Message sent",
-        "msgCost": str(sms_api_response.actual_msgCount),
-        "currentBalance": str(sms_api_response.user_current_balance),
-        "contentType": sms_request.contentType,
-        "msgCount": len(sms_request.receiver),
-        "errorCode": sms_api_response.errorCode,
-        "messageId": sms_api_response.user_messageId
-    }
-    
 
 @app.get("/sms/status")
 def get_message_status(
