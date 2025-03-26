@@ -534,6 +534,8 @@ def get_message_status(
     if api_credentials.token != token:
         raise HTTPException(status_code=403, detail="Invalid token")
 
+    actual_token = sender_obj.token
+    
     # Step 4: Check if messageId exists in SendSmsApiResponse table
     sms_response = db.query(SendSmsApiResponse).filter(SendSmsApiResponse.user_messageId == messageId).first()
     if not sms_response:
@@ -542,7 +544,7 @@ def get_message_status(
     # Step 5: Call external API
     api_url = "https://api.mobireach.com.bd/sms/status"
     headers = {
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {actual_token}"
     }
     params = {
         "sender": sender,
