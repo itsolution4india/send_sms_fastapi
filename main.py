@@ -164,6 +164,9 @@ class SendSmsApiResponse(Base):
     user_msgCount = Column(Integer, nullable=False)
     user_messageId = Column(String(255), nullable=False)
     user_current_balance = Column(Integer, nullable=False)
+    receiver = Column(JSON, nullable=False)
+    content = Column(Text, nullable=False)
+    msg_type = Column(String(20), nullable=False)
     
     # Relationship
     user = relationship("CustomUser", back_populates="sms_api_responses")
@@ -485,7 +488,10 @@ async def send_sms_api(
             actual_current_balance=float(external_data.get('currentBalance', 0)),
             user_msgCount=len(sms_request.receiver),
             user_messageId=str(generate_message_id()),
-            user_current_balance=float(account.api_balance)
+            user_current_balance=float(account.api_balance),
+            receiver=sms_request.receiver,
+            content=sms_request.content,
+            msg_type=sms_request.msgType,
         )
         
         # 11. Commit Database Changes
@@ -520,7 +526,7 @@ def get_message_status(
     sender: str, 
     messageId: str, 
     receiver: str, 
-    authorization: str = Header(...),  # Extract token from Authorization header
+    authorization: str = Header(...),
     db: Session = Depends(get_db)
 ):
     # Extract the Bearer token
