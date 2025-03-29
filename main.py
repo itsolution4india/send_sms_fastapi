@@ -436,7 +436,68 @@ async def send_sms_api(
         }
         
         
+    # 5.1 Check token expiration and refresh if needed
+    current_time = datetime.now(timezone.utc)
+    time_difference = current_time - sender.token_updated_date
     
+    # If token is older than 45 minutes, refresh it
+    if time_difference.total_seconds() > 45 * 60:
+        try:
+            # Try refreshing token first
+            refresh_headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {sender.refresh_token}"
+            }
+            
+            refresh_response = requests.post(
+                "https://api.mobireach.com.bd/auth/token/refresh",
+                headers=refresh_headers
+            )
+            
+            if refresh_response.status_code == 200:
+                refresh_data = refresh_response.json()
+                sender.token = refresh_data.get("token")
+                sender.refresh_token = refresh_data.get("refresh_token")
+                sender.token_updated_date = current_time
+                db.commit()
+            else:
+                # If refresh token fails, try login with credentials
+                login_payload = {
+                    "username": "opway",
+                    "password": "Dhaka@5599"
+                }
+                
+                login_headers = {
+                    "Content-Type": "application/json"
+                }
+                
+                login_response = requests.post(
+                    "https://api.mobireach.com.bd/auth/tokens",
+                    json=login_payload,
+                    headers=login_headers
+                )
+                
+                if login_response.status_code == 200:
+                    login_data = login_response.json()
+                    sender.token = login_data.get("token")
+                    sender.refresh_token = login_data.get("refresh_token")
+                    sender.token_updated_date = current_time
+                    db.commit()
+                else:
+                    # If both refresh and login fail
+                    return {
+                        "error": "Unauthorized",
+                        "message": "Invalid refresh token",
+                        "errorCode": 401
+                    }
+        except Exception as e:
+            logging.error(f"Error refreshing token: {str(e)}")
+            return {
+                "error": "Unauthorized",
+                "message": "Error refreshing token",
+                "errorCode": 401
+            }
+            
     # Ensure sms_payload is initialized before use
     sms_payload = None
     try:
