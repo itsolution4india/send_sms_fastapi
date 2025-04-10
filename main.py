@@ -1,6 +1,6 @@
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends, Request, APIRouter, status, Header
-from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Text, Numeric
+from pydantic import BaseModel, Field, validator
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Text, Numeric, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.orm import relationship
@@ -18,6 +18,15 @@ from utils import generate_token, generate_message_id
 from typing import Dict
 from sqlalchemy import select
 import requests
+import hmac
+import hashlib
+import requests
+import json
+from datetime import datetime, timezone, timedelta
+import asyncio
+
+background_task_running = False
+
 
 # Set up logging
 # Create logs directory if it doesn't exist
@@ -51,6 +60,23 @@ Base = declarative_base()
 
 # FastAPI app instance
 app = FastAPI()
+
+@app.on_event("startup")
+async def start_background_task():
+    asyncio.create_task(periodic_status_check())
+
+async def periodic_status_check():
+    global background_task_running
+    background_task_running = True
+    
+    while background_task_running:
+        await check_message_statuses()
+        await asyncio.sleep(2)
+
+@app.on_event("shutdown")
+async def stop_background_task():
+    global background_task_running
+    background_task_running = False
 
 # Middleware for request logging
 @app.middleware("http")
@@ -185,6 +211,36 @@ class Account(Base):
     # Relationship
     user = relationship("CustomUser", back_populates="accounts")
 
+class Webhook(Base):
+    __tablename__ = "webhooks"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    url = Column(String, nullable=False)
+    secret = Column(String, nullable=False)  # For signature verification
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    user = relationship("User", back_populates="webhooks")
+
+class MessageStatus(Base):
+    __tablename__ = "message_statuses"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_message_id = Column(String, nullable=False, index=True)
+    actual_message_id = Column(String, nullable=False, index=True)
+    receiver = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    last_checked_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    next_check_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    check_attempts = Column(Integer, default=0)
+    webhook_sent = Column(Boolean, default=False)
+    webhook_sent_at = Column(DateTime, nullable=True)
+    webhook_attempts = Column(Integer, default=0)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    
+    user = relationship("User")
+
 
 CustomUser.api_credentials = relationship("ApiCredentials", back_populates="user")
 CustomUser.sms_api_responses = relationship("SendSmsApiResponse", back_populates="user")
@@ -243,6 +299,16 @@ class SMSRequest(BaseModel):
     token: str
     campaign_id: str
     user_id: int
+
+
+class WebhookRegisterRequest(BaseModel):
+    url: str
+    
+    @validator('url')
+    def validate_url(cls, v):
+        if not v.startswith(('http://', 'https://')):
+            raise ValueError('URL must start with http:// or https://')
+        return v
 
 auth_router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -559,6 +625,21 @@ async def send_sms_api(
         db.add(sms_api_response)
         db.commit()
         
+        
+        message_statuses = []
+        for receiver in sms_request.receiver:
+            message_status = MessageStatus(
+                user_message_id=sms_api_response.user_messageId,
+                actual_message_id=sms_api_response.actual_messageId,
+                receiver=receiver,
+                status="PENDING",
+                user_id=user.id,
+                next_check_at=datetime.now(timezone.utc) + timedelta(seconds=2)
+            )
+            message_statuses.append(message_status)
+
+        db.add_all(message_statuses)
+        db.commit()
         # 12. Return Response
         return {
             "status": "SUCCESS",
@@ -680,6 +761,137 @@ def check_account_balance(
 
     return response
 
+async def check_message_statuses():
+    # Use a new DB session for this background task
+    db = next(get_db())
+    try:
+        # Get pending messages due for checking
+        current_time = datetime.now(timezone.utc)
+        pending_messages = db.query(MessageStatus).filter(
+            MessageStatus.status.in_(["PENDING", "DELIVERY_PENDING"]),
+            MessageStatus.next_check_at <= current_time,
+            MessageStatus.check_attempts < 50  # Limit retries (100 seconds total)
+        ).limit(50).all()  # Process in batches
+        
+        for message in pending_messages:
+            # Update check attempt count
+            message.check_attempts += 1
+            
+            try:
+                # Get sender ID for this user
+                sender_query = select(SenderID).where(
+                    SenderID.id == db.query(CustomUser).filter(CustomUser.id == message.user_id).first().sender_id_id
+                )
+                sender = db.execute(sender_query).scalar_one_or_none()
+                
+                if not sender:
+                    message.status = "FAILED"
+                    message.next_check_at = current_time + timedelta(hours=24)  # No further checks
+                    continue
+                
+                # Check message status with MobiReach
+                headers = {
+                    "Authorization": f"Bearer {sender.token}"
+                }
+                
+                response = requests.get(
+                    f"https://api.mobireach.com.bd/sms/status?sender={sender.sender_id}&messageId={message.actual_message_id}&receiver={message.receiver}",
+                    headers=headers
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Update message status
+                    prev_status = message.status
+                    message.status = data.get("status", "UNKNOWN")
+                    
+                    # If status is final (delivered or failed), no more checks needed
+                    if message.status in ["SUCCESS", "FAILED"]:
+                        message.next_check_at = current_time + timedelta(hours=24)  # No further checks
+                    else:
+                        # Exponential backoff for status checks
+                        backoff = min(30, 2 ** (message.check_attempts // 5))  # Max 30 seconds
+                        message.next_check_at = current_time + timedelta(seconds=backoff)
+                    
+                    # If status changed, send webhook notification
+                    if prev_status != message.status and not message.webhook_sent:
+                        send_webhook_notification(db, message, data)
+                else:
+                    # If API check failed, retry soon
+                    message.next_check_at = current_time + timedelta(seconds=5)
+            
+            except Exception as e:
+                logging.error(f"Error checking message status: {str(e)}")
+                message.next_check_at = current_time + timedelta(seconds=5)
+            
+            finally:
+                db.commit()
+    
+    except Exception as e:
+        logging.error(f"Error in check_message_statuses: {str(e)}")
+        db.rollback()
+    
+    finally:
+        db.close()
+
+def send_webhook_notification(db, message, status_data):
+    webhooks = db.query(Webhook).filter(
+        Webhook.user_id == message.user_id,
+        Webhook.is_active == True
+    ).all()
+    
+    if not webhooks:
+        # No webhooks to notify
+        message.webhook_sent = True
+        return
+    
+    # Prepare webhook payload
+    payload = {
+        "messageId": message.user_message_id,
+        "actualMessageId": message.actual_message_id,
+        "receiver": message.receiver,
+        "status": message.status,
+        "statusDescription": status_data.get("description", ""),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "msgCost": status_data.get("msgCost", "0"),
+        "contentType": status_data.get("contentType", 1),
+        "msgCount": status_data.get("msgCount", 0)
+    }
+    
+    # Send to all registered webhooks
+    for webhook in webhooks:
+        try:
+            # Generate signature for webhook verification
+            signature = hmac.new(
+                webhook.secret.encode(),
+                json.dumps(payload).encode(),
+                hashlib.sha256
+            ).hexdigest()
+            
+            # Send webhook notification
+            response = requests.post(
+                webhook.url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Signature": signature,
+                    "X-Webhook-Id": str(webhook.id)
+                },
+                timeout=5  # Short timeout to avoid blocking
+            )
+            
+            if response.status_code in [200, 201, 202]:
+                message.webhook_sent = True
+                message.webhook_sent_at = datetime.now(timezone.utc)
+                break  # Successfully sent to at least one webhook
+            
+        except Exception as e:
+            logging.error(f"Error sending webhook: {str(e)}")
+            message.webhook_attempts += 1
+
+
+
 # Function to send SMS and save response in the database
 async def send_sms(receivers: list, sender: str, msgType: str, requestType: str, content: str, token: str, campaign_id: str, user_id: int,total_receivers:int, db: Session):
     url = 'https://api.mobireach.com.bd/sms/send'
@@ -798,6 +1010,8 @@ def health_check():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": "1.0.0"
     }
+    
+
 
 # Exception handler for internal server errors
 @app.exception_handler(Exception)
