@@ -214,7 +214,7 @@ class Account(Base):
     user = relationship("CustomUser", back_populates="accounts")
 
 class Webhook(Base):
-    __tablename__ = "webhooks"
+    __tablename__ = "sms_app_webhook"
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("sms_app_customuser.id"))  # Changed from "users.id"
@@ -227,7 +227,7 @@ class Webhook(Base):
     user = relationship("CustomUser", back_populates="webhooks")
 
 class MessageStatus(Base):
-    __tablename__ = "message_statuses"
+    __tablename__ = "sms_app_messagestatus"
     
     id = Column(Integer, primary_key=True, index=True)
     user_message_id = Column(String, nullable=False, index=True)
@@ -248,6 +248,8 @@ class MessageStatus(Base):
 CustomUser.api_credentials = relationship("ApiCredentials", back_populates="user")
 CustomUser.sms_api_responses = relationship("SendSmsApiResponse", back_populates="user")
 CustomUser.accounts = relationship("Account", back_populates="user")
+CustomUser.webhooks = relationship("Webhook", back_populates="user")
+CustomUser.message_statuses = relationship("MessageStatus", back_populates="user")
 
 # Pydantic model for login request
 class LoginRequest(BaseModel):
