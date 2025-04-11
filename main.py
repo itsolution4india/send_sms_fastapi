@@ -16,7 +16,7 @@ from logging.handlers import RotatingFileHandler
 import time
 from utils import generate_token, generate_message_id
 from typing import Dict
-from sqlalchemy import select
+from sqlalchemy import select, text
 import requests
 import hmac
 import hashlib
@@ -71,7 +71,7 @@ async def periodic_status_check():
     
     while background_task_running:
         await check_message_statuses()
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
 @app.on_event("shutdown")
 async def stop_background_task():
@@ -639,7 +639,8 @@ async def send_sms_api(
                 receiver=receiver,
                 status="PENDING",
                 user_id=user.id,
-                next_check_at=datetime.now(timezone.utc) + timedelta(seconds=2)
+                next_check_at=datetime.now(timezone.utc) + timedelta(seconds=2 + (len(message_statuses) * 0.5)),
+                webhook_sent=False
             )
             message_statuses.append(message_status)
 
@@ -772,80 +773,114 @@ async def check_message_statuses():
     try:
         # Get pending messages due for checking
         current_time = datetime.now(timezone.utc)
-        pending_messages = db.query(MessageStatus).filter(
-            MessageStatus.status.in_(["PENDING", "DELIVERY_PENDING"]),
-            MessageStatus.next_check_at <= current_time,
-            MessageStatus.check_attempts < 50  # Limit retries (100 seconds total)
-        ).limit(50).all()  # Process in batches
         
-        # Group messages by user_id and actual_message_id to reduce API calls
-        messages_by_user_and_id = {}
+        # Use DISTINCT ON to get only one message per user_message_id + receiver combination
+        # This is PostgreSQL-specific - adjust if using a different database
+        pending_messages_query = """
+            SELECT DISTINCT ON (user_message_id, receiver) *
+            FROM sms_app_messagestatus
+            WHERE status IN ('PENDING', 'DELIVERY_PENDING')
+            AND next_check_at <= :current_time
+            AND check_attempts < 50
+            AND (webhook_sent = FALSE OR webhook_sent IS NULL)
+            ORDER BY user_message_id, receiver, check_attempts
+            LIMIT 50
+        """
+        
+        pending_messages = db.execute(text(pending_messages_query), 
+                                     {"current_time": current_time}).fetchall()
+        
+        # Convert to ORM objects if necessary
+        pending_messages = [MessageStatus(**dict(msg._mapping)) for msg in pending_messages]
+        
+        # Group messages by user_id to reduce API calls
+        messages_by_user = {}
         for message in pending_messages:
-            key = (message.user_id, message.actual_message_id)
-            if key not in messages_by_user_and_id:
-                messages_by_user_and_id[key] = []
-            messages_by_user_and_id[key].append(message)
+            if message.user_id not in messages_by_user:
+                messages_by_user[message.user_id] = []
+            messages_by_user[message.user_id].append(message)
         
-        # Process each group
-        for (user_id, actual_message_id), messages in messages_by_user_and_id.items():
+        # Process each user's messages
+        for user_id, messages in messages_by_user.items():
             try:
-                # Get sender ID for this user (once per user)
-                sender_query = select(SenderID).where(
-                    SenderID.id == db.query(CustomUser).filter(CustomUser.id == user_id).first().sender_id_id
-                )
-                sender = db.execute(sender_query).scalar_one_or_none()
+                # Get sender ID for this user (only once per user)
+                user = db.query(CustomUser).filter(CustomUser.id == user_id).first()
+                if not user:
+                    continue
+                    
+                sender = db.query(SenderID).filter(SenderID.id == user.sender_id_id).first()
                 
                 if not sender:
                     for message in messages:
                         message.status = "FAILED"
-                        message.next_check_at = current_time + timedelta(hours=24)  # No further checks
+                        message.next_check_at = current_time + timedelta(hours=24)
+                    db.commit()
                     continue
                 
-                # Process each message in the group
+                # Create API client with authentication
+                headers = {
+                    "Authorization": f"Bearer {sender.token}"
+                }
+                
+                # Process each message
                 for message in messages:
-                    # Update check attempt count
-                    message.check_attempts += 1
+                    # Acquire a lock on this specific message record
+                    locked_message = db.query(MessageStatus).with_for_update().filter(
+                        MessageStatus.id == message.id
+                    ).first()
                     
-                    # Check message status with MobiReach
-                    headers = {
-                        "Authorization": f"Bearer {sender.token}"
-                    }
+                    if not locked_message or locked_message.webhook_sent:
+                        continue  # Skip if already processed by another worker
                     
-                    response = requests.get(
-                        f"https://api.mobireach.com.bd/sms/status?sender={sender.sender_id}&messageId={actual_message_id}&receiver={message.receiver}",
-                        headers=headers
-                    )
+                    # Update check attempt
+                    locked_message.check_attempts += 1
                     
-                    if response.status_code == 200:
-                        data = response.json()
+                    try:
+                        # Check message status
+                        response = requests.get(
+                            f"https://api.mobireach.com.bd/sms/status?sender={sender.sender_id}&messageId={locked_message.actual_message_id}&receiver={locked_message.receiver}",
+                            headers=headers,
+                            timeout=5
+                        )
                         
-                        # Update message status
-                        prev_status = message.status
-                        message.status = data.get("status", "UNKNOWN")
-                        
-                        # If status is final (delivered or failed), no more checks needed
-                        if message.status in ["SUCCESS", "FAILED"]:
-                            message.next_check_at = current_time + timedelta(hours=24)  # No further checks
+                        if response.status_code == 200:
+                            data = response.json()
+                            prev_status = locked_message.status
+                            new_status = data.get("status", "UNKNOWN")
+                            
+                            # Update status if changed
+                            if prev_status != new_status:
+                                locked_message.status = new_status
+                                
+                                # Set next check time based on status
+                                if new_status in ["SUCCESS", "FAILED"]:
+                                    locked_message.next_check_at = current_time + timedelta(hours=24)
+                                else:
+                                    # Exponential backoff
+                                    backoff = min(30, 2 ** (locked_message.check_attempts // 5))
+                                    locked_message.next_check_at = current_time + timedelta(seconds=backoff)
+                                
+                                # Only send webhook on state change
+                                if not locked_message.webhook_sent:
+                                    send_webhook_notification(db, locked_message, data)
+                            else:
+                                # Status hasn't changed, update next check time
+                                backoff = min(30, 2 ** (locked_message.check_attempts // 5))
+                                locked_message.next_check_at = current_time + timedelta(seconds=backoff)
                         else:
-                            # Exponential backoff for status checks
-                            backoff = min(30, 2 ** (message.check_attempts // 5))  # Max 30 seconds
-                            message.next_check_at = current_time + timedelta(seconds=backoff)
-                        
-                        # If status changed, send webhook notification
-                        if prev_status != message.status and not message.webhook_sent:
-                            send_webhook_notification(db, message, data)
-                    else:
-                        # If API check failed, retry soon
-                        message.next_check_at = current_time + timedelta(seconds=5)
-                
-                # Commit after processing each group
-                db.commit()
-                
+                            # API error, retry soon
+                            locked_message.next_check_at = current_time + timedelta(seconds=5)
+                    
+                    except Exception as e:
+                        logging.error(f"Error checking status for message {locked_message.id}: {str(e)}")
+                        locked_message.next_check_at = current_time + timedelta(seconds=5)
+                    
+                    # Commit each message individually to ensure changes are saved
+                    db.commit()
+            
             except Exception as e:
-                logging.error(f"Error checking message status for user {user_id}, message {actual_message_id}: {str(e)}")
-                for message in messages:
-                    message.next_check_at = current_time + timedelta(seconds=5)
-                db.commit()
+                logging.error(f"Error processing messages for user {user_id}: {str(e)}")
+                db.rollback()
     
     except Exception as e:
         logging.error(f"Error in check_message_statuses: {str(e)}")
@@ -855,82 +890,85 @@ async def check_message_statuses():
         db.close()
 
 def send_webhook_notification(db, message, status_data):
-    # Check if we've already sent a webhook for this message_id and status
-    existing_notification = db.query(MessageStatus).filter(
-        MessageStatus.user_message_id == message.user_message_id,
-        MessageStatus.receiver == message.receiver,
-        MessageStatus.status == message.status,
-        MessageStatus.webhook_sent == True
-    ).first()
-    
-    if existing_notification:
-        # We already sent a notification for this message with this status
-        message.webhook_sent = True
-        return
-    
-    webhooks = db.query(Webhook).filter(
-        Webhook.user_id == message.user_id,
-        Webhook.is_active == True
-    ).all()
-    
-    if not webhooks:
-        # No webhooks to notify
-        message.webhook_sent = True
-        return
-    
-    # Prepare webhook payload
-    payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "status": status_data.get("status", "UNKNOWN"),
-        "statusDescription": status_data.get("description", ""),
-        "msgCount": 1 if status_data.get("msgCount", 0) > 0 else 0,
-        "contentType": status_data.get("contentType", 1),
-        "receiver": message.receiver,
-        "messageId": message.user_message_id,
-    }
-    
-    # Send to the first working webhook
-    webhook_sent = False
-    for webhook in webhooks:
-        try:
-            # Generate signature for webhook verification
-            signature = hmac.new(
-                webhook.secret.encode(),
-                json.dumps(payload).encode(),
-                hashlib.sha256
-            ).hexdigest()
+    # First, check if we've already sent a webhook for this message_id + receiver + status
+    try:
+        # Use a direct SQL query with a row lock to prevent race conditions
+        with db.begin_nested():  # Use a savepoint
+            # Check and lock the record to prevent concurrent webhook sends
+            already_sent = db.query(MessageStatus).with_for_update().filter(
+                MessageStatus.user_message_id == message.user_message_id,
+                MessageStatus.receiver == message.receiver,
+                MessageStatus.webhook_sent == True
+            ).first() is not None
             
-            # Send webhook notification
-            response = requests.post(
-                webhook.url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Signature": signature,
-                    "X-Webhook-Id": str(webhook.id)
-                },
-                timeout=5  # Short timeout to avoid blocking
-            )
+            if already_sent:
+                return  # Skip if already sent
             
-            if response.status_code in [200, 201, 202]:
-                message.webhook_sent = True
-                message.webhook_sent_at = datetime.now(timezone.utc)
-                webhook_sent = True
-                break  # Successfully sent to at least one webhook
+            # Mark this message as processed to prevent duplicates
+            message.webhook_sent = True
+            message.webhook_sent_at = datetime.now(timezone.utc)
+            db.flush()  # Write to DB but don't commit transaction yet
             
-        except Exception as e:
-            logging.error(f"Error sending webhook for message {message.user_message_id}, receiver {message.receiver}: {str(e)}")
-            message.webhook_attempts += 1
+            # Get active webhooks for this user
+            webhooks = db.query(Webhook).filter(
+                Webhook.user_id == message.user_id,
+                Webhook.is_active == True
+            ).all()
+            
+            if not webhooks:
+                return  # No webhooks to notify
+            
+            # Prepare webhook payload 
+            payload = {
+                "messageId": message.user_message_id,
+                "actualMessageId": message.actual_message_id,
+                "receiver": message.receiver,
+                "status": message.status,
+                "statusDescription": status_data.get("description", ""),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "msgCost": status_data.get("msgCost", "0"),
+                "contentType": status_data.get("contentType", 1),
+                "msgCount": status_data.get("msgCount", 0)
+            }
+            
+            # Try sending to each webhook until one succeeds
+            webhook_success = False
+            for webhook in webhooks:
+                try:
+                    # Generate signature
+                    signature = hmac.new(
+                        webhook.secret.encode(),
+                        json.dumps(payload).encode(),
+                        hashlib.sha256
+                    ).hexdigest()
+                    
+                    # Send webhook notification
+                    response = requests.post(
+                        webhook.url,
+                        json=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-Signature": signature,
+                            "X-Webhook-Id": str(webhook.id)
+                        },
+                        timeout=5
+                    )
+                    
+                    if response.status_code in [200, 201, 202]:
+                        webhook_success = True
+                        break
+                    
+                except Exception as e:
+                    logging.error(f"Error sending webhook for message {message.user_message_id}, receiver {message.receiver}: {str(e)}")
+                    message.webhook_attempts += 1
+            
+            # If no webhook succeeded, allow retrying later
+            if not webhook_success:
+                message.webhook_sent = False
     
-    # Update all messages with the same ID and receiver to prevent duplicates
-    if webhook_sent:
-        db.query(MessageStatus).filter(
-            MessageStatus.user_message_id == message.user_message_id,
-            MessageStatus.receiver == message.receiver
-        ).update({
-            "webhook_sent": True,
-            "webhook_sent_at": datetime.now(timezone.utc)
-        })
+    except Exception as e:
+        logging.error(f"Error in send_webhook_notification: {str(e)}")
+        message.webhook_sent = False
 
 
 # Function to send SMS and save response in the database
