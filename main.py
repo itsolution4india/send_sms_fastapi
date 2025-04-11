@@ -920,15 +920,13 @@ def send_webhook_notification(db, message, status_data):
             
             # Prepare webhook payload 
             payload = {
-                "messageId": message.user_message_id,
-                "actualMessageId": message.actual_message_id,
-                "receiver": message.receiver,
-                "status": message.status,
-                "statusDescription": status_data.get("description", ""),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "msgCost": status_data.get("msgCost", "0"),
+                "status": status_data.status,
+                "statusDescription": status_data.get("description", ""),
+                "msgCount": status_data.get("msgCount", 0),
                 "contentType": status_data.get("contentType", 1),
-                "msgCount": status_data.get("msgCount", 0)
+                "receiver": message.receiver,
+                "messageId": message.user_message_id,
             }
             
             # Try sending to each webhook until one succeeds
