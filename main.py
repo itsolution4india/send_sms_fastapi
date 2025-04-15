@@ -27,30 +27,40 @@ import asyncio
 
 background_task_running = False
 
-
+import logging
 # Set up logging
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
 
 # Configure logger
-logger = logging.getLogger("sms_api")
-logger.setLevel(logging.INFO)
+# logger = logging.getLogger("sms_api")
+# logger.setLevel(logging.INFO)
 
-# Console handler
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_format)
+# # Console handler
+# console_handler = logging.StreamHandler()
+# console_handler.setLevel(logging.INFO)
+# console_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# console_handler.setFormatter(console_format)
 
-# File handler with rotation (10MB per file, max 5 files)
-file_handler = RotatingFileHandler("logs/sms_api.log", maxBytes=10*1024*1024, backupCount=5)
-file_handler.setLevel(logging.INFO)
-file_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(file_format)
+# # File handler with rotation (10MB per file, max 5 files)
+# file_handler = RotatingFileHandler("logs/sms_api.log", maxBytes=10*1024*1024, backupCount=5)
+# file_handler.setLevel(logging.INFO)
+# file_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# file_handler.setFormatter(file_format)
 
-# Add handlers to logger
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+# # Add handlers to logger
+# logger.addHandler(console_handler)
+# logger.addHandler(file_handler)
+
+
+# Configure logging
+logging.basicConfig(
+    filename="logs/sms_api.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+)
+
+logger = logging.getLogger("sms_api_logger")
 
 # PostgreSQL database connection
 DATABASE_URL = "postgresql://postgres:Solution%4097@217.145.69.172:5432/smsdb"
