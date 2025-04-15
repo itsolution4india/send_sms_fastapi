@@ -937,7 +937,7 @@ def send_webhook_notification(db, message, status_data):
             # Prepare webhook payload 
             payload = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "status": status_data.status,
+                "status": status_data.get("status", ""),
                 "statusDescription": status_data.get("description", ""),
                 "msgCount": status_data.get("msgCount", 0),
                 "contentType": status_data.get("contentType", 1),
