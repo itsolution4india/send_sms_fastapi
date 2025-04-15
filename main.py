@@ -469,6 +469,7 @@ async def send_sms_api(
 ):
     # 1. Validate Authorization Header
     if not authorization or not authorization.startswith("Bearer "):
+        logger.error(f"Validate Authorization Header Failed {authorization}")
         return {
             "error": "Unauthorized",
             "message": "Invalid or missing refresh token",
@@ -484,6 +485,7 @@ async def send_sms_api(
     api_credential = db.execute(query_api_cred).scalar_one_or_none()
     
     if not api_credential:
+        logger.error(f"Validate Refresh Token Failed")
         return {
             "error": "Unauthorized",
             "message": "Invalid refresh token",
@@ -497,6 +499,7 @@ async def send_sms_api(
     account = db.query(Account).filter(Account.user_id == user.id).first()
     
     if not account or account.api_balance < len(sms_request.receiver):
+        logger.error(f"{user.id} Check Account Balance Failed")
         return {
             "error": "Balance error",
             "message": "Insufficient Balance ",
@@ -510,6 +513,7 @@ async def send_sms_api(
     sender = db.execute(sender_query).scalar_one_or_none()
     
     if not sender:
+        logger.error(f"{user.id} Validate Sender ")
         return {
             "error": "Unauthorized",
             "message": "Invalid Sender ID",
@@ -566,6 +570,7 @@ async def send_sms_api(
                     db.commit()
                 else:
                     # If both refresh and login fail
+                    logger.error(f"{user.id} Token validation Failed (our end)")
                     return {
                         "error": "Unauthorized",
                         "message": "Invalid refresh token",
@@ -657,6 +662,7 @@ async def send_sms_api(
         db.add_all(message_statuses)
         db.commit()
         # 12. Return Response
+        logger.info(f"{user.id} SUCCESS Message sent, Message ID {sms_api_response.user_messageId}")
         return {
             "status": "SUCCESS",
             "description": "Message sent",
