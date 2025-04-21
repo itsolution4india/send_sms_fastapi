@@ -654,7 +654,7 @@ async def send_sms_api(
                 receiver=receiver,
                 status="PENDING",
                 user_id=user.id,
-                next_check_at=datetime.now(timezone.utc) + timedelta(seconds=1.5 + (len(message_statuses) * 0.5)),
+                next_check_at=datetime.now(timezone.utc) + timedelta(seconds=1 + (len(message_statuses) * 0.5)),
                 webhook_sent=False
             )
             message_statuses.append(message_status)
@@ -881,7 +881,7 @@ async def check_message_statuses():
                                     send_webhook_notification(db, locked_message, data)
                             else:
                                 # Status hasn't changed, update next check time
-                                backoff = min(30, 1.5 ** (locked_message.check_attempts // 5))
+                                backoff = min(30, 1 ** (locked_message.check_attempts // 5))
                                 locked_message.next_check_at = current_time + timedelta(seconds=backoff)
                         else:
                             # API error, retry soon
