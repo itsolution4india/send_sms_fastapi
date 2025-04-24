@@ -34,17 +34,17 @@ os.makedirs("logs", exist_ok=True)
 
 # Configure logger
 # logger = logging.getLogger("sms_api")
-# logger.setLevel(logging.INFO)
+# logger.setLevel(logger.info)
 
 # # Console handler
 # console_handler = logging.StreamHandler()
-# console_handler.setLevel(logging.INFO)
+# console_handler.setLevel(logger.info)
 # console_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 # console_handler.setFormatter(console_format)
 
 # # File handler with rotation (10MB per file, max 5 files)
 # file_handler = RotatingFileHandler("logs/sms_api.log", maxBytes=10*1024*1024, backupCount=5)
-# file_handler.setLevel(logging.INFO)
+# file_handler.setLevel(logger.info)
 # file_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 # file_handler.setFormatter(file_format)
 
@@ -577,7 +577,7 @@ async def send_sms_api(
                         "errorCode": 401
                     }
         except Exception as e:
-            logging.error(f"Error refreshing token: {str(e)}")
+            logger.error(f"Error refreshing token: {str(e)}")
             return {
                 "error": "Unauthorized",
                 "message": "Error refreshing token",
@@ -611,7 +611,7 @@ async def send_sms_api(
         
         # 8. Parse External API Response
         if external_response.status_code != 200:
-            logging.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.json()}")
+            logger.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.json()}")
             return {
                 "error": "Unauthorized",
                 "message": external_response.json(),
@@ -676,7 +676,7 @@ async def send_sms_api(
     
     except Exception as e:
         # Log the specific error
-        logging.error(f"Error in send_sms_api: {str(e)}")
+        logger.error(f"Error in send_sms_api: {str(e)}")
         
         db.rollback()
         
@@ -801,7 +801,7 @@ async def send_sms_api(
                         "errorCode": 401
                     }
         except Exception as e:
-            logging.error(f"Error refreshing token: {str(e)}")
+            logger.error(f"Error refreshing token: {str(e)}")
             return {
                 "error": "Unauthorized",
                 "message": "Error refreshing token",
@@ -835,7 +835,7 @@ async def send_sms_api(
         
         # 8. Parse External API Response
         if external_response.status_code != 200:
-            logging.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.json()}")
+            logger.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.json()}")
             return {
                 "error": "Unauthorized",
                 "message": external_response.json(),
@@ -886,7 +886,7 @@ async def send_sms_api(
         db.add_all(message_statuses)
         db.commit()
         # 12. Return Response
-        logger.info(f"{user.id} SUCCESS Message sent, Message ID {sms_api_response.user_messageId}")
+        logger.error(f"{user.id} SUCCESS Message sent, Message ID {sms_api_response.user_messageId}")
         return {
             "status": "SUCCESS",
             "description": "Message sent",
@@ -900,7 +900,7 @@ async def send_sms_api(
     
     except Exception as e:
         # Log the specific error
-        logging.error(f"Error in send_sms_api: {str(e)}")
+        logger.error(f"Error in send_sms_api: {str(e)}")
         
         db.rollback()
         
@@ -1087,7 +1087,7 @@ async def check_message_statuses():
                             data = response.json()
                             prev_status = locked_message.status
                             new_status = data.get("status", "UNKNOWN")
-                            logging.info(f"INFO, {prev_status}, {new_status}")
+                            logger.info(f"INFO, {prev_status}, {new_status}")
                             # Update status if changed
                             if prev_status != new_status:
                                 locked_message.status = new_status
@@ -1108,12 +1108,12 @@ async def check_message_statuses():
                                 backoff = min(30, 1 ** (locked_message.check_attempts // 5))
                                 locked_message.next_check_at = current_time + timedelta(seconds=backoff)
                         else:
-                            logging.error(f"FAILED, {locked_message.id}")
+                            logger.error(f"FAILED, {locked_message.id}")
                             locked_message.status = "FAILED"
                             locked_message.next_check_at = current_time + timedelta(seconds=5)
                     
                     except Exception as e:
-                        logging.error(f"Error checking status for message {locked_message.id}: {str(e)}")
+                        logger.error(f"Error checking status for message {locked_message.id}: {str(e)}")
                         locked_message.status = "FAILED"
                         locked_message.next_check_at = current_time + timedelta(seconds=5)
                     
@@ -1121,11 +1121,11 @@ async def check_message_statuses():
                     db.commit()
             
             except Exception as e:
-                logging.error(f"Error processing messages for user {user_id}: {str(e)}")
+                logger.error(f"Error processing messages for user {user_id}: {str(e)}")
                 db.rollback()
     
     except Exception as e:
-        logging.error(f"Error in check_message_statuses: {str(e)}")
+        logger.error(f"Error in check_message_statuses: {str(e)}")
         db.rollback()
     
     finally:
@@ -1199,7 +1199,7 @@ def send_webhook_notification(db, message, status_data):
                         break
                     
                 except Exception as e:
-                    logging.error(f"Error sending webhook for message {message.user_message_id}, receiver {message.receiver}: {str(e)}")
+                    logger.error(f"Error sending webhook for message {message.user_message_id}, receiver {message.receiver}: {str(e)}")
                     message.webhook_attempts += 1
             
             # If no webhook succeeded, allow retrying later
@@ -1207,7 +1207,7 @@ def send_webhook_notification(db, message, status_data):
                 message.webhook_sent = False
     
     except Exception as e:
-        logging.error(f"Error in send_webhook_notification: {str(e)}")
+        logger.error(f"Error in send_webhook_notification: {str(e)}")
         message.webhook_sent = False
 
 
