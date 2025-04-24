@@ -461,7 +461,7 @@ async def refresh_token(
             detail=f"Token refresh failed: {str(e)}"
         )
 
-@sms_router.post("/send")
+@sms_router.post("/send-promotional")
 async def send_sms_api(
     sms_request: SmsSendRequest,
     authorization: str = Header(None),
@@ -593,7 +593,7 @@ async def send_sms_api(
             "receiver": sms_request.receiver,
             "contentType": sms_request.contentType,
             "content": sms_request.content,
-            "msgType": sms_request.msgType,
+            "msgType": "P",
             "requestType": sms_request.requestType
         }
         
@@ -638,7 +638,231 @@ async def send_sms_api(
             user_current_balance=float(account.api_balance),
             receiver=sms_request.receiver,
             content=sms_request.content,
-            msg_type=sms_request.msgType,
+            msg_type="P",
+        )
+        
+        # 11. Commit Database Changes
+        db.add(sms_api_response)
+        db.commit()
+        
+        
+        message_statuses = []
+        for receiver in sms_request.receiver:
+            message_status = MessageStatus(
+                user_message_id=sms_api_response.user_messageId,
+                actual_message_id=sms_api_response.actual_messageId,
+                receiver=receiver,
+                status="PENDING",
+                user_id=user.id,
+                next_check_at=datetime.now(timezone.utc) + timedelta(seconds=1 + (len(message_statuses) * 0.5)),
+                webhook_sent=False
+            )
+            message_statuses.append(message_status)
+
+        db.add_all(message_statuses)
+        db.commit()
+        # 12. Return Response
+        logger.info(f"{user.id} SUCCESS Message sent, Message ID {sms_api_response.user_messageId}")
+        return {
+            "status": "SUCCESS",
+            "description": "Message sent",
+            "msgCost": str(sms_api_response.actual_msgCount),
+            "currentBalance": str(sms_api_response.user_current_balance),
+            "contentType": sms_request.contentType,
+            "msgCount": len(sms_request.receiver),
+            "errorCode": sms_api_response.errorCode,
+            "messageId": sms_api_response.user_messageId
+        }
+    
+    except Exception as e:
+        # Log the specific error
+        logging.error(f"Error in send_sms_api: {str(e)}")
+        
+        db.rollback()
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred {str(e)}"
+        )
+
+@sms_router.post("/send-transactional")
+async def send_sms_api(
+    sms_request: SmsSendRequest,
+    authorization: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    # 1. Validate Authorization Header
+    if not authorization or not authorization.startswith("Bearer "):
+        logger.error(f"Validate Authorization Header Failed {authorization}")
+        return {
+            "error": "Unauthorized",
+            "message": "Invalid or missing refresh token",
+            "errorCode": 401
+        }
+    
+    refresh_token = authorization.split(" ")[1]
+    
+    # 2. Validate Refresh Token
+    query_api_cred = select(ApiCredentials).where(
+        ApiCredentials.refresh_token == refresh_token
+    )
+    api_credential = db.execute(query_api_cred).scalar_one_or_none()
+    
+    if not api_credential:
+        logger.error(f"Validate Refresh Token Failed {refresh_token}")
+        return {
+            "error": "Unauthorized",
+            "message": "Invalid refresh token",
+            "errorCode": 401
+        }
+    
+    # 3. Get User and Account
+    user = api_credential.user
+    
+    # 4. Check Account Balance
+    account = db.query(Account).filter(Account.user_id == user.id).first()
+    
+    if not account or account.api_balance < len(sms_request.receiver):
+        logger.error(f"{user.id} Check Account Balance Failed")
+        return {
+            "error": "Balance error",
+            "message": "Insufficient Balance ",
+            "errorCode": 1506
+        }
+    
+    # 5. Validate Sender
+    sender_query = select(SenderID).where(
+        SenderID.id == user.sender_id_id    
+    )
+    sender = db.execute(sender_query).scalar_one_or_none()
+    
+    if not sender:
+        logger.error(f"{user.id} Validate Sender ")
+        return {
+            "error": "Unauthorized",
+            "message": "Invalid Sender ID",
+            "errorCode": 401
+        }
+        
+        
+    # 5.1 Check token expiration and refresh if needed
+    current_time = datetime.now(timezone.utc)
+    time_difference = current_time - sender.token_updated_date
+    
+    # If token is older than 45 minutes, refresh it
+    if time_difference.total_seconds() > 45 * 60:
+        try:
+            # Try refreshing token first
+            refresh_headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {sender.refresh_token}"
+            }
+            
+            refresh_response = requests.post(
+                "https://api.mobireach.com.bd/auth/token/refresh",
+                headers=refresh_headers
+            )
+            
+            if refresh_response.status_code == 200:
+                refresh_data = refresh_response.json()
+                sender.token = refresh_data.get("token")
+                sender.refresh_token = refresh_data.get("refresh_token")
+                sender.token_updated_date = current_time
+                db.commit()
+            else:
+                # If refresh token fails, try login with credentials
+                login_payload = {
+                    "username": "opway",
+                    "password": "Dhaka@5599"
+                }
+                
+                login_headers = {
+                    "Content-Type": "application/json"
+                }
+                
+                login_response = requests.post(
+                    "https://api.mobireach.com.bd/auth/tokens",
+                    json=login_payload,
+                    headers=login_headers
+                )
+                
+                if login_response.status_code == 200:
+                    login_data = login_response.json()
+                    sender.token = login_data.get("token")
+                    sender.refresh_token = login_data.get("refresh_token")
+                    sender.token_updated_date = current_time
+                    db.commit()
+                else:
+                    # If both refresh and login fail
+                    logger.error(f"{user.id} Token validation Failed (our end)")
+                    return {
+                        "error": "Unauthorized",
+                        "message": "Invalid refresh token",
+                        "errorCode": 401
+                    }
+        except Exception as e:
+            logging.error(f"Error refreshing token: {str(e)}")
+            return {
+                "error": "Unauthorized",
+                "message": "Error refreshing token",
+                "errorCode": 401
+            }
+            
+    # Ensure sms_payload is initialized before use
+    sms_payload = None
+    try:
+        # 6. Prepare SMS Send Request
+        sms_payload = {
+            "sender": sms_request.sender,
+            "receiver": sms_request.receiver,
+            "contentType": sms_request.contentType,
+            "content": sms_request.content,
+            "msgType": "T",
+            "requestType": sms_request.requestType
+        }
+        
+        # 7. Send SMS via External API
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {sender.token}"
+        }
+        
+        external_response = requests.post(
+            "https://api.mobireach.com.bd/sms/send", 
+            json=sms_payload, 
+            headers=headers
+        )
+        
+        # 8. Parse External API Response
+        if external_response.status_code != 200:
+            logging.error(f"SMS API Call Failed. Status Code: {external_response.status_code}, Response: {external_response.json()}")
+            return {
+                "error": "Unauthorized",
+                "message": external_response.json(),
+                "errorCode": 401
+            }
+        
+        external_data = external_response.json()
+        
+        # 9. Update Account Balance
+        account.api_balance -= len(sms_request.receiver)
+        
+        # 10. Create SMS API Response
+        sms_api_response = SendSmsApiResponse(
+            user_id=user.id,
+            status=external_data.get('status', 'UNKNOWN'),
+            description=external_data.get('description', ''),
+            content_type=sms_request.contentType,
+            errorCode=external_data.get('errorCode', 0),
+            actual_msgCount=float(external_data.get('msgCost', 0)),
+            actual_messageId=str(external_data.get('messageId', '')),
+            actual_current_balance=float(external_data.get('currentBalance', 0)),
+            user_msgCount=len(sms_request.receiver),
+            user_messageId=str(generate_message_id()),
+            user_current_balance=float(account.api_balance),
+            receiver=sms_request.receiver,
+            content=sms_request.content,
+            msg_type="T",
         )
         
         # 11. Commit Database Changes
@@ -863,7 +1087,7 @@ async def check_message_statuses():
                             data = response.json()
                             prev_status = locked_message.status
                             new_status = data.get("status", "UNKNOWN")
-                            
+                            logging.info(f"INFO, {prev_status}, {new_status}")
                             # Update status if changed
                             if prev_status != new_status:
                                 locked_message.status = new_status
@@ -884,11 +1108,13 @@ async def check_message_statuses():
                                 backoff = min(30, 1 ** (locked_message.check_attempts // 5))
                                 locked_message.next_check_at = current_time + timedelta(seconds=backoff)
                         else:
-                            # API error, retry soon
+                            logging.error(f"FAILED, {locked_message.id}")
+                            locked_message.status = "FAILED"
                             locked_message.next_check_at = current_time + timedelta(seconds=5)
                     
                     except Exception as e:
                         logging.error(f"Error checking status for message {locked_message.id}: {str(e)}")
+                        locked_message.status = "FAILED"
                         locked_message.next_check_at = current_time + timedelta(seconds=5)
                     
                     # Commit each message individually to ensure changes are saved
