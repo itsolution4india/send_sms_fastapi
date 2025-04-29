@@ -674,7 +674,7 @@ async def send_sms_api(
             "messageId": sms_api_response.user_messageId
         }
     
-    except Exception as e:
+    except Exception as e:  
         # Log the specific error
         logger.error(f"Error in send_sms_api: {str(e)}")
         
@@ -886,7 +886,7 @@ async def send_sms_api(
         db.add_all(message_statuses)
         db.commit()
         # 12. Return Response
-        logger.error(f"{user.id} SUCCESS Message sent, Message ID {sms_api_response.user_messageId}")
+        logger.info(f"{user.id} SUCCESS Message sent, Message ID {sms_api_response.user_messageId}")
         return {
             "status": "SUCCESS",
             "description": "Message sent",
