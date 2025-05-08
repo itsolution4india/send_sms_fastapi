@@ -1087,7 +1087,7 @@ async def check_message_statuses():
                             data = response.json()
                             prev_status = locked_message.status
                             new_status = data.get("status", "UNKNOWN")
-                            logger.info(f"INFO, {prev_status}, {new_status}")
+                            logger.info(f"INFO, PREVIOUS: {prev_status}, NEW: {new_status}, SENDER: {sender.sender_id}, MessageID: {locked_message.actual_message_id}")
                             # Update status if changed
                             if prev_status != new_status:
                                 locked_message.status = new_status
@@ -1108,7 +1108,7 @@ async def check_message_statuses():
                                 backoff = min(30, 1 ** (locked_message.check_attempts // 5))
                                 locked_message.next_check_at = current_time + timedelta(seconds=backoff)
                         else:
-                            logger.error(f"FAILED, {locked_message.id}")
+                            logger.error(f"FAILED to call status Api, {locked_message.id}")
                             locked_message.status = "FAILED"
                             locked_message.next_check_at = current_time + timedelta(seconds=5)
                     
