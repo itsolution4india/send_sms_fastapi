@@ -1087,7 +1087,7 @@ async def check_message_statuses():
                             data = response.json()
                             prev_status = locked_message.status
                             new_status = data.get("status", "UNKNOWN")
-                            logger.info(f"INFO, PREVIOUS: {prev_status}, NEW: {new_status}, SENDER: {sender.sender_id}, MessageID: {locked_message.actual_message_id}")
+                            logger.info(f"INFO, PREVIOUS: {prev_status}, NEW: {new_status}, Reciver: {locked_message.receiver}, MessageID: {locked_message.actual_message_id}")
                             # Update status if changed
                             if prev_status != new_status:
                                 locked_message.status = new_status
