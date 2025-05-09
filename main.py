@@ -1092,7 +1092,7 @@ async def check_message_statuses():
                             # Update status if changed
                             if prev_status != new_status:
                                 locked_message.status = new_status
-                                locked_message.main_status = new_status
+                                # locked_message.main_status = new_status
                                 # Set next check time based on status
                                 if new_status in ["SUCCESS", "FAILED"]:
                                     locked_message.next_check_at = current_time + timedelta(hours=24)
