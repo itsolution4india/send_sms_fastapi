@@ -193,6 +193,7 @@ class SendSmsApiResponse(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     user_id = Column(Integer, ForeignKey('sms_app_customuser.id'))
     status = Column(String(20), nullable=False)
+    main_status = Column(String(20), nullable=False, default='SUCCESS')
     description = Column(Text, nullable=False)
     content_type = Column(Integer, nullable=False)
     errorCode = Column(Integer, nullable=False)
@@ -1091,7 +1092,7 @@ async def check_message_statuses():
                             # Update status if changed
                             if prev_status != new_status:
                                 locked_message.status = new_status
-                                
+                                locked_message.main_status = new_status
                                 # Set next check time based on status
                                 if new_status in ["SUCCESS", "FAILED"]:
                                     locked_message.next_check_at = current_time + timedelta(hours=24)
